@@ -84,6 +84,11 @@ class Supervisor:
         self._stopped: set[str] = set()
         self._global_stop: EventType = mp.Event()
         self._lock = threading.RLock()
+        # Serializes start_unit/stop_unit per unit, including the wait for a
+        # process to exit, without holding the global _lock during that wait.
+        self._unit_locks: dict[str, threading.Lock] = {
+            name: threading.Lock() for name in self._specs
+        }
         self._loop_thread: threading.Thread | None = None
 
     # -- lifecycle ---------------------------------------------------------
@@ -136,35 +141,42 @@ class Supervisor:
             return out
 
     def stop_unit(self, name: str) -> bool:
-        with self._lock:
-            if name not in self._specs:
-                return False
-            self._stopped.add(name)
-            ev = self._stop_events.get(name)
-            if ev:
-                ev.set()
-            p = self._procs.get(name)
-        if p:
-            p.join(self.JOIN_TIMEOUT)
-            if p.is_alive():
-                p.terminate()
-                p.join(5)
-        with self._lock:
-            self._procs.pop(name, None)
-            self._stop_events.pop(name, None)
+        if name not in self._specs:
+            return False
+        with self._unit_locks[name]:
+            with self._lock:
+                self._stopped.add(name)
+                ev = self._stop_events.get(name)
+                if ev:
+                    ev.set()
+                p = self._procs.get(name)
+            if p:
+                p.join(self.JOIN_TIMEOUT)
+                if p.is_alive():
+                    p.terminate()
+                    p.join(5)
+            with self._lock:
+                # Remove only the process we stopped; the watch loop may
+                # already have reaped it.
+                if self._procs.get(name) is p:
+                    self._procs.pop(name, None)
+                    self._stop_events.pop(name, None)
         log.info("stopped unit %s; it stays stopped until started again", name)
         return True
 
     def start_unit(self, name: str) -> bool:
-        with self._lock:
-            if name not in self._specs:
-                return False
-            self._stopped.discard(name)
-            if name in self._procs and self._procs[name].is_alive():
+        if name not in self._specs:
+            return False
+        # Waits for any stop_unit in progress on this unit to finish first.
+        with self._unit_locks[name]:
+            with self._lock:
+                self._stopped.discard(name)
+                p = self._procs.get(name)
+                if p and p.is_alive():
+                    return True
+                self._specs[name].backoff_until = 0.0
+                self._start_unit(name)
                 return True
-            self._specs[name].backoff_until = 0.0
-            self._start_unit(name)
-            return True
 
     def is_healthy(self) -> bool:
         with self._lock:
