@@ -142,7 +142,7 @@ data-processing/
 │   └── post_processing/unit.py
 ├── deploy/
 │   ├── windows/                  # install_service.ps1, uninstall_service.ps1, web.config
-│   └── linux/                    # install.sh, data-processing.service
+│   └── linux/                    # install.sh, service.template
 ├── shared/                       # reserved for code the units share
 ├── tests/
 ├── requirements.txt
@@ -228,8 +228,9 @@ units:
 - Turn a unit off: set `enabled: false`.
 - Change how often a unit runs: edit `interval_seconds`.
 - Changes take effect only after a restart.
-- Running staging and UAT on one machine: give each its own install
-  folder, `api.port`, `child_unit_prefix` and `logging.path`.
+- `service.name` is also the name of the installed Windows or Linux
+  service. To run staging, UAT and demo on one machine, see
+  [Running several instances](#running-several-instances).
 
 ## Control API
 
@@ -421,8 +422,9 @@ Good to know:
 ### 3. Install as a Windows Service
 
 **What you get:** Windows starts it on boot, keeps it running after you log
-out, and restarts it 5 seconds after a crash. It shows up as
-`data-processing` in `services.msc`. A small tool called
+out, and restarts it 5 seconds after a crash. It shows up in
+`services.msc` under its `service.name` from `settings.yaml`
+(`data-processing` in these examples). A small tool called
 [NSSM](https://nssm.cc) wraps `python main.py` so Windows can manage it as
 a service.
 
@@ -464,11 +466,15 @@ robocopy "E:\Project\Python Service" "C:\Services\data-processing" /E /XD .venv 
 powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\windows\install_service.ps1" -AppDir "C:\Services\data-processing"
 ```
 
+Before installing, check `service.name`, `api.port` and `logging.path` in
+that folder's `config\settings.yaml`.
+
 The installer checks the Python version (for packages), creates
 `C:\Services\data-processing\venv`, installs the requirements, registers
-the service, and starts it. It runs `main.pyc` for a package or `main.py`
-for source. It also gives the service 30 seconds to shut down cleanly.
-Before installing, set `logging.path` in that folder's `settings.yaml`.
+the service under `service.name`, and starts it. It runs `main.pyc` for a
+package or `main.py` for source. It also gives the service 30 seconds to
+shut down cleanly. If a service with that name already exists from a
+different folder, it stops without touching it.
 
 **Step 4: Check it**
 
@@ -486,7 +492,7 @@ You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
 | App and settings | `C:\Services\data-processing\` |
 | Python environment | `C:\Services\data-processing\venv\` |
 | Log | wherever `logging.path` in `settings.yaml` points |
-| Startup errors and crash tracebacks | `C:\ProgramData\data-processing\logs\service.err.log` (the installer's `-LogDir`) |
+| Startup errors and crash tracebacks | `C:\ProgramData\<service.name>\logs\service.err.log` (change with the installer's `-LogDir`) |
 
 **Day to day**
 
@@ -521,10 +527,12 @@ between `main.py` and `main.pyc`.
 **Uninstall**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\windows\uninstall_service.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\windows\uninstall_service.ps1" -AppDir "C:\Services\data-processing"
 ```
 
-That removes the service but keeps the files and logs. To delete those too:
+`-AppDir` removes the service that was installed from that folder, even if
+`service.name` was changed since. You can pass `-ServiceName` instead. That
+removes the service but keeps the files and logs. To delete those too:
 
 ```powershell
 Remove-Item -Recurse -Force C:\Services\data-processing, C:\ProgramData\data-processing
@@ -553,12 +561,20 @@ sudo bash /opt/data-processing/deploy/linux/install.sh
 For a source install, copy the project folder to `/opt/data-processing`
 instead of unzipping.
 
-The script creates a `data-processing` system user, a venv, and the log
-folder `/var/log/data-processing/`. It installs the requirements and
-registers and starts the systemd service. Before running it, point
-`logging.path` in `/opt/data-processing/config/settings.yaml` at that
-folder, for example `/var/log/data-processing/data-processing.txt`, because
-the service user can only write there and in `/opt/data-processing`.
+The script works on the folder it sits in. It reads `service.name` from
+that folder's `config/settings.yaml` and names everything after it: the
+systemd service, a system user, and the log folder `/var/log/<service.name>/`.
+It installs the requirements, writes
+`/etc/systemd/system/<service.name>.service` from
+[`deploy/linux/service.template`](deploy/linux/service.template), and
+(re)starts the service. If a service with that name already exists from a
+different folder, it stops without touching it.
+
+Before running it, point `logging.path` in
+`/opt/data-processing/config/settings.yaml` at that log folder, for example
+`/var/log/data-processing/data-processing.txt`, because the service user can
+only write there and in the app folder. Keep `service.name` lowercase
+(letters, digits, `-`, `_`), because it is also the system user's name.
 Check and manage it with:
 
 ```bash
@@ -567,13 +583,55 @@ sudo systemctl restart data-processing
 journalctl -u data-processing -f
 ```
 
+To remove it:
+
+```bash
+sudo systemctl disable --now data-processing
+sudo rm /etc/systemd/system/data-processing.service
+sudo systemctl daemon-reload
+```
+
+### Running several instances
+
+You can run staging, UAT and demo side by side on one machine, on Windows or
+Linux. Each instance is a separate copy of the app in its own folder, with
+its own `config/settings.yaml`, installed with the normal installer. These
+settings must be different in each copy:
+
+| Setting | Why | Staging | UAT | Demo |
+|---|---|---|---|---|
+| `service.name` | Name of the Windows/Linux service | `data-processing-staging` | `data-processing-uat` | `data-processing-demo` |
+| `service.child_unit_prefix` | Unit process names in Task Manager | `dp_staging` | `dp_uat` | `dp_demo` |
+| `api.port` | Two instances can't share a port | `8001` | `8002` | `8003` |
+| `logging.path` | Each instance gets its own log | `.../staging/data-processing.txt` | `.../uat/data-processing.txt` | `.../demo/data-processing.txt` |
+
+For example, on Windows:
+
+```powershell
+# one folder per instance, each with its own edited settings.yaml
+C:\Services\data-processing-uat\deploy\windows\install_service.ps1 -AppDir C:\Services\data-processing-uat
+Get-Service data-processing-*
+```
+
+and on Linux:
+
+```bash
+sudo bash /opt/data-processing-uat/deploy/linux/install.sh
+systemctl list-units 'data-processing-*'
+```
+
+If you forget to change `service.name` in a copy, the installer stops with
+"a service named ... already exists" instead of replacing the other
+instance.
+
 ### Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `address already in use` / error 10048 | Something else is using port 8000, often an earlier run of this service | Stop the other copy (see below) or change `api.port` |
 | `bad magic number` | The package was built with a different Python version | Install the matching Python, or rebuild with this machine's Python |
-| Service starts, then stops | Startup error | Read `C:\ProgramData\data-processing\logs\service.err.log` |
+| Service starts, then stops | Startup error | Read `C:\ProgramData\<service.name>\logs\service.err.log` |
+| Installer says a service with that name already exists | Another instance already uses this `service.name` | Give this copy its own `service.name` in its `settings.yaml` |
 | `logging.path is not set` on startup | No `logging.path` in `settings.yaml` | Add it (see [Configuration](#configuration)) |
 | `log write failed` in the console or `service.err.log` | The log folder isn't writable, or the file is locked by another program | Fix the folder's permissions or `logging.path` |
 | `could not create renamed exe` error in the log | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |

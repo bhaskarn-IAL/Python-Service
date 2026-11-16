@@ -1,0 +1,19 @@
+# systemd unit template. install.sh fills in the @...@ values and writes it to
+# /etc/systemd/system/<service.name>.service.
+[Unit]
+Description=@SERVICE_NAME@ (data-processing supervisor + units) from @APP_DIR@
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@APP_DIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart="@APP_DIR@/venv/bin/python" "@APP_DIR@/@MAIN@"
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

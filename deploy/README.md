@@ -1,18 +1,26 @@
 # Deployment
 
-Service name: **data-processing**
+The installed service is named after `service.name` in the copy's
+`config/settings.yaml`. Each copy (staging, uat, demo, ...) lives in its own
+folder with its own `settings.yaml`, so several can run on one machine. See
+"Running several instances" in the main README for which settings must differ.
 
 ## Linux (systemd)
 
 ```bash
-sudo mkdir -p /opt/data-processing
-sudo rsync -a ./ /opt/data-processing/
-sudo deploy/linux/install.sh
-sudo systemctl status data-processing
+sudo mkdir -p /opt/data-processing-uat
+sudo rsync -a ./ /opt/data-processing-uat/
+# set service.name, api.port, child_unit_prefix and logging.path in
+# /opt/data-processing-uat/config/settings.yaml, then:
+sudo bash /opt/data-processing-uat/deploy/linux/install.sh
+sudo systemctl status data-processing-uat
 ```
 
-Logs land in `/var/log/data-processing/`. The control API listens on
-`127.0.0.1:8000`; put nginx in front if it needs to be public.
+`install.sh` creates a system user and a log folder (`/var/log/<service.name>/`)
+named after the service, and writes `/etc/systemd/system/<service.name>.service`
+from `service.template`. Point `logging.path` into that log folder. On Linux,
+keep `service.name` lowercase (letters, digits, `-`, `_`), because it is also
+the system user's name.
 
 ## Windows (NSSM)
 
@@ -20,19 +28,22 @@ Install [NSSM](https://nssm.cc/download) first, then from an elevated
 PowerShell:
 
 ```powershell
-# Copy the project to the install directory first.
-Copy-Item -Recurse .\* C:\Services\data-processing\
-cd C:\Services\data-processing\deploy\windows
-.\install_service.ps1 -AppDir C:\Services\data-processing -Nssm C:\tools\nssm.exe
+# Copy the project to its own install folder first, and edit its settings.yaml.
+Copy-Item -Recurse .\* C:\Services\data-processing-uat\
+C:\Services\data-processing-uat\deploy\windows\install_service.ps1 -AppDir C:\Services\data-processing-uat -Nssm C:\tools\nssm.exe
 ```
 
-The service runs `python main.py`, restarts on failure, gets up to 30 s
-to shut down cleanly when stopped, and writes logs to
-`C:\ProgramData\data-processing\logs`. Console logging is turned off
-(`SERVICE_LOG_CONSOLE=0`), so `service.err.log` holds only uvicorn output
-and real crash tracebacks, not copies of every log line. If you need public HTTP, point IIS
-at `http://localhost:8000` using `web.config` (reverse proxy only — IIS
-must not host the workers).
+The service runs `python main.py`, restarts on failure, and gets up to 30 s
+to shut down cleanly when stopped. NSSM's console capture
+(`service.out.log`, `service.err.log`) goes to
+`C:\ProgramData\<service.name>\logs`; the app's own log is `logging.path`.
+If you need public HTTP, point IIS at the instance's port using `web.config`
+(reverse proxy only; IIS must not host the workers).
+
+To remove it: `uninstall_service.ps1 -AppDir C:\Services\data-processing-uat`.
+
+Both installers refuse to install over a service of the same name that was
+installed from a different folder.
 
 ## Installing from a compiled package
 
@@ -42,20 +53,12 @@ in the install folder. On Windows:
 
 ```powershell
 Expand-Archive .\data-processing-0.1.0-py314.zip -DestinationPath C:\Services
-Rename-Item C:\Services\data-processing-0.1.0-py314 data-processing
+Rename-Item C:\Services\data-processing-0.1.0-py314 data-processing-uat
 ```
 
-On Linux, unpack it to `/opt/data-processing` the same way. Then run the
+On Linux, unpack it to `/opt/data-processing-uat` the same way. Then run the
 same installer as above.
 
 Both installers notice `BUILD_INFO.json`, run `main.pyc` instead of
 `main.py`, and stop before installing anything if the machine's Python
 version doesn't match the one the package was built with.
-
-## Env vars honored by the service
-
-| Variable            | Default | Purpose                      |
-|---------------------|---------|------------------------------|
-| `SERVICE_LOG_DIR`   | `logs`  | Where log files are written  |
-| `SERVICE_LOG_LEVEL` | `INFO`  | Root log level               |
-| `SERVICE_LOG_CONSOLE` | `true` | Also print log lines to the console |
