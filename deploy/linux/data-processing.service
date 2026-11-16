@@ -1,0 +1,18 @@
+[Unit]
+Description=data-processing service (supervisor + workers)
+After=network.target
+
+[Service]
+Type=simple
+User=data-processing
+WorkingDirectory=/opt/data-processing
+Environment=PYTHONUNBUFFERED=1
+Environment=SERVICE_LOG_DIR=/var/log/data-processing
+ExecStart=/opt/data-processing/venv/bin/python main.py
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

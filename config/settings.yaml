@@ -1,0 +1,37 @@
+# Which units to run, and the parameters each one gets.
+# Each unit is independent - no messaging between them.
+# Add a new unit by registering it in core/registry.py and adding a section here.
+
+service:
+  name: "data-processing"
+
+logging:
+  dir: "logs"
+  level: "INFO"
+  console: true   # also print log lines to the terminal; the Windows service turns this off
+
+api:
+  host: "127.0.0.1"
+  port: 8000
+  version: "0.1.0"
+
+units:
+  ingestion:
+    enabled: true
+    cfg:
+      interval_seconds: 3.0
+
+  pre_processing:
+    enabled: true
+    cfg:
+      interval_seconds: 4.0
+
+  processing:
+    enabled: true
+    cfg:
+      interval_seconds: 5.0
+
+  post_processing:
+    enabled: true
+    cfg:
+      interval_seconds: 6.0
