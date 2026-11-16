@@ -142,7 +142,7 @@ data-processing/
 │   └── post_processing/unit.py
 ├── deploy/
 │   ├── read_settings.py          # used by both installers to read settings.yaml
-│   ├── windows/                  # install_service.ps1, uninstall_service.ps1, web.config
+│   ├── windows/                  # install_service.cmd, uninstall_service.cmd, service_setup.py, web.config
 │   └── linux/                    # install.sh, service.template
 ├── shared/                       # reserved for code the units share
 ├── tests/
@@ -431,60 +431,78 @@ a service.
 
 **Before you start**
 
-- Python 3.14 installed, with `python --version` working in a new
-  PowerShell window.
-- Port 8000 free. Don't also run `python main.py` in a terminal at the same
-  time.
-- A PowerShell window opened **as Administrator** (right-click, then "Run
-  as administrator") for every command below.
+Everything below runs in a **Command Prompt** (`cmd.exe`), not PowerShell,
+so it works where PowerShell is blocked.
+
+- Python 3.14 installed, with `python --version` working in a new Command
+  Prompt.
+- Port 8000 free (or whatever `api.port` you set). Don't also run
+  `python main.py` in a terminal at the same time.
+- A Command Prompt opened **as Administrator** (Start, type `cmd`,
+  right-click "Command Prompt", then "Run as administrator") for every
+  command below.
 
 **Step 1: Install NSSM**
 
-```powershell
+```bat
 winget install NSSM.NSSM
 ```
 
-Then close and reopen the admin PowerShell, so `nssm` is found.
+Then close and reopen the admin Command Prompt, so `nssm` is found. If
+`winget` isn't available, download NSSM from [nssm.cc](https://nssm.cc),
+unzip it, and pass the path to `nssm.exe` to the installer in step 3.
 
 **Step 2: Put the app in its permanent folder.** Pick one:
 
 From a compiled package (copy the zip to the server first):
 
-```powershell
-Expand-Archive .\data-processing-0.1.0-py314.zip -DestinationPath C:\Services
-Rename-Item C:\Services\data-processing-0.1.0-py314 data-processing
+```bat
+tar -xf data-processing-0.1.0-py314.zip -C C:\Services
+ren C:\Services\data-processing-0.1.0-py314 data-processing
 ```
 
 Or from source:
 
-```powershell
+```bat
 robocopy "E:\Project\Python Service" "C:\Services\data-processing" /E /XD .venv logs dist __pycache__ .git
 ```
 
 **Step 3: Install the service**
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\windows\install_service.ps1" -AppDir "C:\Services\data-processing"
+First check `service.name`, `api.port` and `logging.path` in
+`C:\Services\data-processing\config\settings.yaml`. Then:
+
+```bat
+C:\Services\data-processing\deploy\windows\install_service.cmd "C:\Services\data-processing"
 ```
 
-Before installing, check `service.name`, `api.port` and `logging.path` in
-that folder's `config\settings.yaml`.
+Or, without typing anything: open `C:\Services\data-processing\deploy\windows`
+in Explorer, right-click `install_service.cmd` and choose **Run as
+administrator**. With no folder given, it installs the app folder it sits in.
+Either way, the window stays open at the end ("Press any key to close") so
+you can read the result.
+
+If `nssm` isn't on the PATH, add its location as a second argument, for
+example `... "C:\Services\data-processing" C:\tools\nssm.exe`.
 
 The installer checks the Python version (for packages), creates
-`C:\Services\data-processing\venv`, installs the requirements, registers
-the service under `service.name`, and starts it. It runs `main.pyc` for a
-package or `main.py` for source. It also gives the service 30 seconds to
-shut down cleanly. If a service with that name already exists from a
-different folder, it stops without touching it.
+`C:\Services\data-processing\venv`, installs the requirements, creates the
+log folder from `logging.path`, registers the service under `service.name`,
+and starts it. It runs `main.pyc` for a package or `main.py` for source. It
+also gives the service 30 seconds to shut down cleanly. If a service with
+that name already exists from a different folder, it stops without
+touching it. The `.cmd` file only checks the basics and creates the venv;
+the rest is done by
+[`deploy/windows/service_setup.py`](deploy/windows/service_setup.py).
 
 **Step 4: Check it**
 
-```powershell
-Get-Service data-processing
+```bat
+sc query data-processing
 curl.exe http://127.0.0.1:8000/health
 ```
 
-You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
+You should see `STATE : 4 RUNNING` and `{"status":"ok","units_alive":4,"units_total":4}`.
 
 **Where things live**
 
@@ -497,48 +515,51 @@ You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
 
 **Day to day**
 
-```powershell
-Restart-Service data-processing
-Stop-Service data-processing
-Start-Service data-processing
-Get-Content C:\Services\data-processing\logs\data-processing.txt -Tail 20 -Wait
+```bat
+net stop data-processing
+net start data-processing
+sc query data-processing
+type C:\Services\data-processing\logs\data-processing.txt
 ```
 
 To change settings, edit `C:\Services\data-processing\config\settings.yaml`,
-then run `Restart-Service data-processing`.
+then run `net stop data-processing` and `net start data-processing`.
 
 **Upgrade to a new package version**
 
-```powershell
-Stop-Service data-processing
-Expand-Archive .\data-processing-0.2.0-py314.zip -DestinationPath C:\Services\_new
-robocopy C:\Services\_new\data-processing-0.2.0-py314 C:\Services\data-processing /MIR /XD venv /XF settings.yaml
-C:\Services\data-processing\venv\Scripts\pip.exe install -r C:\Services\data-processing\requirements.txt
-Start-Service data-processing
-Remove-Item -Recurse -Force C:\Services\_new
+```bat
+net stop data-processing
+mkdir C:\Services\_new
+tar -xf data-processing-0.2.0-py314.zip -C C:\Services\_new
+robocopy C:\Services\_new\data-processing-0.2.0-py314 C:\Services\data-processing /MIR /XD venv logs /XF settings.yaml
+C:\Services\data-processing\venv\Scripts\python.exe -m pip install -r C:\Services\data-processing\requirements.txt
+net start data-processing
+rmdir /s /q C:\Services\_new
 ```
 
-`/MIR` makes the folder match the new version exactly, but `/XD venv`
-keeps the installed Python environment and `/XF settings.yaml` keeps your
-server's settings. If the new release adds settings, copy them in by hand.
-If you're switching from a source install to a package (or back), run the
-installer from step 3 again instead, because the file it starts changes
-between `main.py` and `main.pyc`.
+`/MIR` makes the folder match the new version exactly, but `/XD venv logs`
+keeps the installed Python environment and any log folder inside the app
+folder, and `/XF settings.yaml` keeps your server's settings. If the new
+release adds settings, copy them in by hand. If you're switching from a
+source install to a package (or back), run the installer from step 3 again
+instead, because the file it starts changes between `main.py` and
+`main.pyc`.
 
 **Uninstall**
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\windows\uninstall_service.ps1" -AppDir "C:\Services\data-processing"
+```bat
+C:\Services\data-processing\deploy\windows\uninstall_service.cmd "C:\Services\data-processing"
 ```
 
-`-AppDir` removes the service that was installed from that folder, even if
-`service.name` was changed since. You can pass `-ServiceName` instead. That
-removes the service but keeps the files and logs. To delete those too,
-remove the app folder and the log folder from `logging.path` (here, the
-default `logs` folder is inside the app folder):
+(or right-click `uninstall_service.cmd` > **Run as administrator**). That
+removes the service installed from that folder, even if
+`service.name` was changed since. To remove one by name instead:
+`uninstall_service.cmd /name data-processing`. The files and logs are kept.
+To delete those too, remove the app folder and the log folder from
+`logging.path` (here, the `logs` folder is inside the app folder):
 
-```powershell
-Remove-Item -Recurse -Force C:\Services\data-processing
+```bat
+rmdir /s /q C:\Services\data-processing
 ```
 
 **Optional: reach the API from other machines through IIS.** Don't host
@@ -610,10 +631,10 @@ settings must be different in each copy:
 
 For example, on Windows:
 
-```powershell
-# one folder per instance, each with its own edited settings.yaml
-C:\Services\data-processing-uat\deploy\windows\install_service.ps1 -AppDir C:\Services\data-processing-uat
-Get-Service data-processing-*
+```bat
+rem one folder per instance, each with its own edited settings.yaml
+C:\Services\data-processing-uat\deploy\windows\install_service.cmd "C:\Services\data-processing-uat"
+sc query state= all | findstr /i "SERVICE_NAME: data-processing-"
 ```
 
 and on Linux:

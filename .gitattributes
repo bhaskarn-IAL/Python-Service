@@ -2,3 +2,5 @@
 # checkout (core.autocrlf=true), or bash and systemd fail on the stray \r.
 *.sh             text eol=lf
 *.template       text eol=lf
+# Windows batch files need CRLF, or labels and goto can misbehave.
+*.cmd            text eol=crlf

@@ -24,14 +24,18 @@ it is also the system user's name.
 
 ## Windows (NSSM)
 
-Install [NSSM](https://nssm.cc/download) first, then from an elevated
-PowerShell:
+Install [NSSM](https://nssm.cc/download) first, then from a Command Prompt
+opened as Administrator (no PowerShell needed):
 
-```powershell
-# Copy the project to its own install folder first, and edit its settings.yaml.
-Copy-Item -Recurse .\* C:\Services\data-processing-uat\
-C:\Services\data-processing-uat\deploy\windows\install_service.ps1 -AppDir C:\Services\data-processing-uat -Nssm C:\tools\nssm.exe
+```bat
+rem Copy the project to its own install folder first, and edit its settings.yaml.
+robocopy . C:\Services\data-processing-uat /E /XD .venv venv logs dist __pycache__ .git
+C:\Services\data-processing-uat\deploy\windows\install_service.cmd "C:\Services\data-processing-uat" C:\tools\nssm.exe
 ```
+
+The `.cmd` file checks the basics and creates the venv, then
+`service_setup.py` (next to it) reads `settings.yaml` and registers the
+service with NSSM.
 
 The service runs `python main.py`, restarts on failure, and gets up to 30 s
 to shut down cleanly when stopped. The installer creates the folder of
@@ -40,7 +44,8 @@ to shut down cleanly when stopped. The installer creates the folder of
 If you need public HTTP, point IIS at the instance's port using `web.config`
 (reverse proxy only; IIS must not host the workers).
 
-To remove it: `uninstall_service.ps1 -AppDir C:\Services\data-processing-uat`.
+To remove it: `uninstall_service.cmd "C:\Services\data-processing-uat"`,
+or by name: `uninstall_service.cmd /name data-processing-uat`.
 
 Both installers refuse to install over a service of the same name that was
 installed from a different folder.
@@ -51,9 +56,9 @@ Build it with `python build.py` (see the main README), copy the zip from
 `dist\` to the target machine, and unpack it so that `main.pyc` sits directly
 in the install folder. On Windows:
 
-```powershell
-Expand-Archive .\data-processing-0.1.0-py314.zip -DestinationPath C:\Services
-Rename-Item C:\Services\data-processing-0.1.0-py314 data-processing-uat
+```bat
+tar -xf data-processing-0.1.0-py314.zip -C C:\Services
+ren C:\Services\data-processing-0.1.0-py314 data-processing-uat
 ```
 
 On Linux, unpack it to `/opt/data-processing-uat` the same way. Then run the

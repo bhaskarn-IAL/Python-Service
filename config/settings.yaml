@@ -3,13 +3,13 @@
 # Add a new unit by registering it in core/registry.py and adding a section here.
 
 service:
-  name: "data-processing"
-  child_unit_prefix: "data_processing"
+  name: "data-processing-dev"
+  child_unit_prefix: "data_processing_dev"
 
 logging:
   # Full path of the text log. The supervisor and every unit append to this one file.
   # Use forward slashes on Windows too. A relative path is taken from the app folder.
-  path: "C:/S2/Random Stuffs/Python Service/logs/data-processing.txt"
+  path: "C:/S2/Random Stuffs/Python Service/logs/data-processing-dev.txt"
 
 api:
   host: "127.0.0.1"
