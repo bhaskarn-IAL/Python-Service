@@ -1,17 +1,17 @@
 # Install this app as a Windows Service using NSSM.
 #
-# The service is named after service.name in <AppDir>\config\settings.yaml, so
-# several copies (staging, uat, demo) can be installed side by side, each from
-# its own folder with its own settings.yaml.
+# Everything comes from <AppDir>\config\settings.yaml:
+#   service.name  -> the Windows service name, so several copies (staging,
+#                    uat, demo) can be installed side by side, each from its
+#                    own folder with its own settings.yaml
+#   logging.path  -> the app's log file; its folder is created here and also
+#                    gets NSSM's console capture (<service.name>.out.log/.err.log)
 #
 # Usage (run in an elevated PowerShell):
 #   .\install_service.ps1 -AppDir "C:\Services\data-processing-uat" -Nssm "C:\tools\nssm.exe"
 param(
     [Parameter(Mandatory = $true)][string]$AppDir,
-    [string]$Nssm = "nssm.exe",
-    # Where NSSM writes service.out.log / service.err.log.
-    # Default: $env:ProgramData\<service name>\logs
-    [string]$LogDir = ""
+    [string]$Nssm = "nssm.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,15 +44,20 @@ if (-not (Test-Path $venv)) {
 }
 $python = Join-Path $venv "Scripts\python.exe"
 
-# The service name comes from settings.yaml (read with the venv's PyYAML).
-$readName = "import sys, yaml; c = yaml.safe_load(open(sys.argv[1], encoding='utf-8')) or {}; print((c.get('service') or {}).get('name') or '')"
-$ServiceName = ("" + (& $python -c $readName $settings)).Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not read service.name from '$settings'."
+# service.name and logging.path come from settings.yaml (read with the venv's PyYAML).
+$values = @(& $python (Join-Path $AppDir "deploy\read_settings.py") $AppDir $settings)
+if ($LASTEXITCODE -ne 0 -or $values.Count -lt 2) {
+    throw "Could not read '$settings'."
 }
+$ServiceName = "$($values[0])".Trim()
+$LogFile = "$($values[1])".Trim()
 if ($ServiceName -notmatch '^[A-Za-z0-9_.-]+$') {
     throw "service.name '$ServiceName' in '$settings' must be set and use only letters, digits, '_', '-' or '.'."
 }
+if (-not $LogFile) {
+    throw "logging.path is not set in '$settings'."
+}
+$LogDir = Split-Path $LogFile -Parent
 
 # Never take over a service that belongs to another folder (another instance,
 # or an unrelated Windows service with the same name).
@@ -64,13 +69,12 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     }
 }
 
-if (-not $LogDir) { $LogDir = Join-Path $env:ProgramData "$ServiceName\logs" }
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 
 $main = Join-Path $AppDir "main.pyc"   # compiled package
 if (-not (Test-Path $main)) { $main = Join-Path $AppDir "main.py" }   # source checkout
 
-Write-Host "Installing service '$ServiceName' from '$AppDir'"
+Write-Host "Installing service '$ServiceName' from '$AppDir', logging to '$LogFile'"
 
 # Remove a previous install of this same instance, then install fresh.
 try { & $Nssm stop     $ServiceName | Out-Null } catch {}
@@ -79,11 +83,12 @@ try { & $Nssm remove   $ServiceName confirm | Out-Null } catch {}
 & $Nssm install $ServiceName $python $main
 & $Nssm set $ServiceName AppDirectory $AppDir
 & $Nssm set $ServiceName Description "$ServiceName (data-processing supervisor + units) from $AppDir"
-# The app's own log file is logging.path in settings.yaml. $LogDir only holds
-# NSSM's capture of the console (startup errors, crash tracebacks).
+# The app writes its own log to logging.path. NSSM's capture of the console
+# (startup errors, crash tracebacks) goes next to it, named after the service
+# so instances sharing a log folder don't collide.
 & $Nssm set $ServiceName AppEnvironmentExtra "PYTHONUNBUFFERED=1"
-& $Nssm set $ServiceName AppStdout (Join-Path $LogDir "service.out.log")
-& $Nssm set $ServiceName AppStderr (Join-Path $LogDir "service.err.log")
+& $Nssm set $ServiceName AppStdout (Join-Path $LogDir "$ServiceName.out.log")
+& $Nssm set $ServiceName AppStderr (Join-Path $LogDir "$ServiceName.err.log")
 & $Nssm set $ServiceName AppRotateFiles 1
 & $Nssm set $ServiceName AppRotateBytes 5242880
 & $Nssm set $ServiceName Start SERVICE_AUTO_START

@@ -141,6 +141,7 @@ data-processing/
 │   ├── processing/unit.py
 │   └── post_processing/unit.py
 ├── deploy/
+│   ├── read_settings.py          # used by both installers to read settings.yaml
 │   ├── windows/                  # install_service.ps1, uninstall_service.ps1, web.config
 │   └── linux/                    # install.sh, service.template
 ├── shared/                       # reserved for code the units share
@@ -491,8 +492,8 @@ You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
 |---|---|
 | App and settings | `C:\Services\data-processing\` |
 | Python environment | `C:\Services\data-processing\venv\` |
-| Log | wherever `logging.path` in `settings.yaml` points |
-| Startup errors and crash tracebacks | `C:\ProgramData\<service.name>\logs\service.err.log` (change with the installer's `-LogDir`) |
+| Log | `logging.path` in `settings.yaml` (the installer creates its folder) |
+| Startup errors and crash tracebacks | `<service.name>.err.log` in the same folder as the log |
 
 **Day to day**
 
@@ -532,10 +533,12 @@ powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\win
 
 `-AppDir` removes the service that was installed from that folder, even if
 `service.name` was changed since. You can pass `-ServiceName` instead. That
-removes the service but keeps the files and logs. To delete those too:
+removes the service but keeps the files and logs. To delete those too,
+remove the app folder and the log folder from `logging.path` (here, the
+default `logs` folder is inside the app folder):
 
 ```powershell
-Remove-Item -Recurse -Force C:\Services\data-processing, C:\ProgramData\data-processing
+Remove-Item -Recurse -Force C:\Services\data-processing
 ```
 
 **Optional: reach the API from other machines through IIS.** Don't host
@@ -561,21 +564,21 @@ sudo bash /opt/data-processing/deploy/linux/install.sh
 For a source install, copy the project folder to `/opt/data-processing`
 instead of unzipping.
 
-The script works on the folder it sits in. It reads `service.name` from
-that folder's `config/settings.yaml` and names everything after it: the
-systemd service, a system user, and the log folder `/var/log/<service.name>/`.
+The script works on the folder it sits in and reads that folder's
+`config/settings.yaml`:
+
+- `service.name` names the systemd service and its system user.
+- `logging.path` is the log file. The script creates its folder if needed
+  and makes the file writable by the service user, for example
+  `/var/log/data-processing/data-processing.txt`.
+
 It installs the requirements, writes
 `/etc/systemd/system/<service.name>.service` from
 [`deploy/linux/service.template`](deploy/linux/service.template), and
 (re)starts the service. If a service with that name already exists from a
-different folder, it stops without touching it.
-
-Before running it, point `logging.path` in
-`/opt/data-processing/config/settings.yaml` at that log folder, for example
-`/var/log/data-processing/data-processing.txt`, because the service user can
-only write there and in the app folder. Keep `service.name` lowercase
-(letters, digits, `-`, `_`), because it is also the system user's name.
-Check and manage it with:
+different folder, it stops without touching it. Keep `service.name`
+lowercase (letters, digits, `-`, `_`), because it is also the system user's
+name. Check and manage it with:
 
 ```bash
 systemctl status data-processing
@@ -630,10 +633,11 @@ instance.
 |---|---|---|
 | `address already in use` / error 10048 | Something else is using port 8000, often an earlier run of this service | Stop the other copy (see below) or change `api.port` |
 | `bad magic number` | The package was built with a different Python version | Install the matching Python, or rebuild with this machine's Python |
-| Service starts, then stops | Startup error | Read `C:\ProgramData\<service.name>\logs\service.err.log` |
+| Service starts, then stops | Startup error | Windows: read `<service.name>.err.log` next to the log file. Linux: `journalctl -u <service.name>` |
+| Installer says `logging.path is not set` | No `logging.path` in that copy's `settings.yaml` | Add it, then run the installer again |
 | Installer says a service with that name already exists | Another instance already uses this `service.name` | Give this copy its own `service.name` in its `settings.yaml` |
 | `logging.path is not set` on startup | No `logging.path` in `settings.yaml` | Add it (see [Configuration](#configuration)) |
-| `log write failed` in the console or `service.err.log` | The log folder isn't writable, or the file is locked by another program | Fix the folder's permissions or `logging.path` |
+| `log write failed` in the console or `<service.name>.err.log` | The log folder isn't writable, or the file is locked by another program | Fix the folder's permissions or `logging.path` |
 | `could not create renamed exe` error in the log | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |
 | Log file keeps growing after the service stopped | Orphaned units are still writing to it | See below |
 

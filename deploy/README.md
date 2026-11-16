@@ -16,11 +16,11 @@ sudo bash /opt/data-processing-uat/deploy/linux/install.sh
 sudo systemctl status data-processing-uat
 ```
 
-`install.sh` creates a system user and a log folder (`/var/log/<service.name>/`)
-named after the service, and writes `/etc/systemd/system/<service.name>.service`
-from `service.template`. Point `logging.path` into that log folder. On Linux,
-keep `service.name` lowercase (letters, digits, `-`, `_`), because it is also
-the system user's name.
+`install.sh` creates a system user named after the service, creates the
+folder of `logging.path` and makes the log file writable by that user, and
+writes `/etc/systemd/system/<service.name>.service` from `service.template`.
+On Linux, keep `service.name` lowercase (letters, digits, `-`, `_`), because
+it is also the system user's name.
 
 ## Windows (NSSM)
 
@@ -34,9 +34,9 @@ C:\Services\data-processing-uat\deploy\windows\install_service.ps1 -AppDir C:\Se
 ```
 
 The service runs `python main.py`, restarts on failure, and gets up to 30 s
-to shut down cleanly when stopped. NSSM's console capture
-(`service.out.log`, `service.err.log`) goes to
-`C:\ProgramData\<service.name>\logs`; the app's own log is `logging.path`.
+to shut down cleanly when stopped. The installer creates the folder of
+`logging.path`, and NSSM's console capture (`<service.name>.out.log`,
+`<service.name>.err.log`) goes into that same folder.
 If you need public HTTP, point IIS at the instance's port using `web.config`
 (reverse proxy only; IIS must not host the workers).
 

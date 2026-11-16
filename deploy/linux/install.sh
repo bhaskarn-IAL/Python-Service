@@ -3,11 +3,14 @@
 # script inside the app folder:
 #   sudo bash /opt/data-processing-uat/deploy/linux/install.sh
 #
-# The service, its system user and its log folder are named after service.name
-# in <app folder>/config/settings.yaml, so several copies (staging, uat, demo)
-# can be installed side by side, each from its own folder.
+# Everything comes from <app folder>/config/settings.yaml:
+#   service.name  -> the systemd service and its system user, so several copies
+#                    (staging, uat, demo) can be installed side by side, each
+#                    from its own folder
+#   logging.path  -> the app's log file; its folder is created and the file is
+#                    made writable by the service user
 #
-# Optional overrides: APP_DIR, USER_NAME, LOG_DIR.
+# Optional overrides: APP_DIR, USER_NAME.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -34,14 +37,20 @@ python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --upgrade pip
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 
-# The service name comes from settings.yaml (read with the venv's PyYAML).
-SERVICE_NAME=$("$APP_DIR/venv/bin/python" -c "import sys, yaml; c = yaml.safe_load(open(sys.argv[1], encoding='utf-8')) or {}; print((c.get('service') or {}).get('name') or '')" "$SETTINGS")
+# service.name and logging.path come from settings.yaml (read with the venv's PyYAML).
+VALUES=$("$APP_DIR/venv/bin/python" "$APP_DIR/deploy/read_settings.py" "$APP_DIR" "$SETTINGS")
+SERVICE_NAME=$(sed -n 1p <<<"$VALUES")
+LOG_FILE=$(sed -n 2p <<<"$VALUES")
 if ! [[ "$SERVICE_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "service.name '$SERVICE_NAME' in $SETTINGS must be set and use only letters, digits, '_', '-' or '.'." >&2
   exit 1
 fi
+if [ -z "$LOG_FILE" ]; then
+  echo "logging.path is not set in $SETTINGS." >&2
+  exit 1
+fi
+LOG_DIR=$(dirname "$LOG_FILE")
 USER_NAME=${USER_NAME:-$SERVICE_NAME}
-LOG_DIR=${LOG_DIR:-/var/log/$SERVICE_NAME}
 UNIT_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 
 # Never take over a service that belongs to another folder (another instance,
@@ -53,11 +62,20 @@ if [ -f "$UNIT_FILE" ] && ! grep -qxF "WorkingDirectory=$APP_DIR" "$UNIT_FILE"; 
   exit 1
 fi
 
-echo "Installing service '$SERVICE_NAME' from $APP_DIR"
+echo "Installing service '$SERVICE_NAME' from $APP_DIR, logging to $LOG_FILE"
 
 id -u "$USER_NAME" >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$USER_NAME"
-mkdir -p "$LOG_DIR"
-chown -R "$USER_NAME:$USER_NAME" "$APP_DIR" "$LOG_DIR"
+chown -R "$USER_NAME:$USER_NAME" "$APP_DIR"
+
+# Log folder: hand it to the service user only if we create it here. An
+# existing folder (it may be shared, like /var/log) keeps its owner; the log
+# file and its lock file are created and handed over instead.
+if [ ! -d "$LOG_DIR" ]; then
+  mkdir -p "$LOG_DIR"
+  chown "$USER_NAME:$USER_NAME" "$LOG_DIR"
+fi
+touch "$LOG_FILE" "$LOG_FILE.lock"
+chown "$USER_NAME:$USER_NAME" "$LOG_FILE" "$LOG_FILE.lock"
 
 sed -e "s|@SERVICE_NAME@|$SERVICE_NAME|g" \
     -e "s|@APP_DIR@|$APP_DIR|g" \
