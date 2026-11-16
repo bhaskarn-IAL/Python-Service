@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import multiprocessing as mp
 import re
 import shutil
@@ -12,10 +11,8 @@ from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
 from typing import Any, Mapping, Type
 
+from core import log
 from core.base_unit import BaseUnit, unit_entry
-
-log = logging.getLogger("supervisor")
-
 
 DEFAULT_CHILD_UNIT_PREFIX = "unit"
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -42,7 +39,7 @@ def _executable_for(unit_name: str, prefix: str) -> str:
         try:
             shutil.copy2(base, dst)
         except OSError:
-            log.warning("could not create renamed exe for %s, using %s", unit_name, base)
+            log.error(f"could not create renamed exe for {unit_name}, using {base}")
             return str(base)
     return str(dst)
 
@@ -72,8 +69,8 @@ class Supervisor:
     """Starts, watches, restarts and stops worker-unit processes.
 
     ``units`` maps unit name -> (BaseUnit subclass, cfg dict).
-    ``child_unit_prefix`` names each unit's log file (``<prefix>_<name>.log``)
-    and, on Windows, its child exe (``<prefix>_<name>.exe``).
+    ``child_unit_prefix`` names each unit's child exe on Windows
+    (``<prefix>_<name>.exe``).
     """
 
     POLL_INTERVAL = 5.0
@@ -118,7 +115,7 @@ class Supervisor:
             target=self._watch_loop, name="supervisor-watch", daemon=True
         )
         self._loop_thread.start()
-        log.info("supervisor started with units: %s", list(self._specs))
+        log.info(f"supervisor started with units: {list(self._specs)}")
 
     def shutdown(self) -> None:
         log.info("supervisor shutting down")
@@ -130,7 +127,7 @@ class Supervisor:
         for name, p in procs:
             p.join(self.JOIN_TIMEOUT)
             if p.is_alive():
-                log.warning("unit %s did not exit in %ss, terminating", name, self.JOIN_TIMEOUT)
+                log.error(f"unit {name} did not exit in {self.JOIN_TIMEOUT}s, terminating")
                 p.terminate()
                 p.join(5)
         if self._loop_thread:
@@ -178,7 +175,7 @@ class Supervisor:
                 if self._procs.get(name) is p:
                     self._procs.pop(name, None)
                     self._stop_events.pop(name, None)
-        log.info("stopped unit %s; it stays stopped until started again", name)
+        log.info(f"stopped unit {name}; it stays stopped until started again")
         return True
 
     def start_unit(self, name: str) -> bool:
@@ -213,7 +210,7 @@ class Supervisor:
         mp.set_executable(_executable_for(name, self._child_unit_prefix))
         proc = mp.Process(
             target=unit_entry,
-            args=(spec.cls, spec.cfg, stop_event, self._child_unit_prefix),
+            args=(spec.cls, spec.cfg, stop_event, log.path()),
             name=f"unit:{name}",
             daemon=False,
         )
@@ -221,7 +218,7 @@ class Supervisor:
         self._procs[name] = proc
         self._stop_events[name] = stop_event
         spec.last_start = time.time()
-        log.info("started unit %s pid=%s", name, proc.pid)
+        log.info(f"started unit {name} pid={proc.pid}")
 
     def _watch_loop(self) -> None:
         while not self._global_stop.is_set():
@@ -239,9 +236,9 @@ class Supervisor:
                     spec.restarts += 1
                     delay = min(self.BACKOFF_MAX, self.BACKOFF_BASE ** min(spec.restarts, 6))
                     spec.backoff_until = time.monotonic() + delay
-                    log.warning(
-                        "unit %s died exitcode=%s, restart in %.1fs (attempt %d)",
-                        name, p.exitcode, delay, spec.restarts,
+                    log.error(
+                        f"unit {name} died exitcode={p.exitcode}, "
+                        f"restart in {delay:.1f}s (attempt {spec.restarts})"
                     )
                 for name in self._specs:
                     if name not in self._procs and name not in self._stopped:

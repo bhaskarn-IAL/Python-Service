@@ -13,14 +13,14 @@ class ProcessingUnit(BaseUnit):
     def setup(self) -> None:
         self._interval = float(self.cfg.get("interval_seconds", 5.0))
         self._runs = 0
-        self.log.info("ready (interval=%.1fs, pid=%d)", self._interval, os.getpid())
+        self.log.info(f"ready (interval={self._interval:.1f}s, pid={os.getpid()})")
 
     def run(self) -> None:
         while not self.stop.is_set():
             self._runs += 1
-            self.log.info("processing: completed run #%d", self._runs)
+            self.log.info(f"processing: completed run #{self._runs}")
             if self.stop.wait(self._interval):
                 return
 
     def teardown(self) -> None:
-        self.log.info("stopped after %d runs", self._runs)
+        self.log.info(f"stopped after {self._runs} runs")

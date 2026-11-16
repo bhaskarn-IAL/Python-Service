@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import logging
+import os
 import signal
 from multiprocessing.synchronize import Event as EventType
 from typing import Any, Mapping, Type
 
-from core.logging_setup import configure_unit_logging
+from core import log
 
 
 class BaseUnit:
     """Contract every worker unit implements.
 
     A unit runs inside its own OS process. The supervisor hands it a
-    shared ``stop_event`` so it can shut down cleanly.
+    shared ``stop_event`` so it can shut down cleanly. Log with
+    ``self.log.info("...")`` and ``self.log.error("...")``.
     """
 
     name: str = "base"
@@ -20,7 +21,7 @@ class BaseUnit:
     def __init__(self, cfg: Mapping[str, Any], stop_event: EventType) -> None:
         self.cfg = dict(cfg or {})
         self.stop = stop_event
-        self.log = logging.getLogger(f"unit.{self.name}")
+        self.log = log
 
     def setup(self) -> None:
         """Open resources (DB, sockets, files). Called once before run()."""
@@ -37,18 +38,16 @@ def unit_entry(
     cls: Type[BaseUnit],
     cfg: Mapping[str, Any],
     stop_event: EventType,
-    log_prefix: str = "unit",
+    log_path: str | os.PathLike[str] | None = None,
 ) -> None:
-    """Process entry point. Runs in the child process after spawn.
-    ``log_prefix`` names the log file: ``<log_prefix>_<unit name>.log``."""
+    """Process entry point. Runs in the child process after spawn."""
     # Child processes ignore Ctrl+C directly; the supervisor sets stop_event.
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except (ValueError, AttributeError):
         pass
 
-    configure_unit_logging(cls.name, log_prefix)
-    log = logging.getLogger(f"unit.{cls.name}")
+    log.init(log_path, source=cls.name)
 
     unit = cls(cfg, stop_event)
     try:
@@ -57,11 +56,11 @@ def unit_entry(
         log.info("run")
         unit.run()
     except Exception:
-        log.exception("unit crashed")
+        log.error("unit crashed")
         raise
     finally:
         try:
             unit.teardown()
             log.info("teardown complete")
         except Exception:
-            log.exception("teardown failed")
+            log.error("teardown failed")

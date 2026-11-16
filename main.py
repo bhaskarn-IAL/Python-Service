@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import multiprocessing as mp
 import signal
 import sys
@@ -11,13 +10,13 @@ import uvicorn
 import yaml
 
 from api.control import build_app
+from core import log
 from core.base_unit import BaseUnit
-from core.logging_setup import apply_logging_config, configure_supervisor_logging
 from core.registry import resolve
 from core.supervisor import DEFAULT_CHILD_UNIT_PREFIX, Supervisor
 
-CONFIG_PATH = Path(__file__).with_name("config") / "settings.yaml"
-log = logging.getLogger("main")
+APP_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = APP_DIR / "config" / "settings.yaml"
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
@@ -40,19 +39,22 @@ def build_units(
 
 
 def main() -> int:
-    # Load config FIRST so logging settings in YAML can shape where
-    # supervisor.log is written and at what level.
     config = load_config()
-    apply_logging_config(config.get("logging"))
-    configure_supervisor_logging()
+
+    log_path = str((config.get("logging") or {}).get("path") or "").strip()
+    if not log_path:
+        print(f"logging.path is not set in {CONFIG_PATH}", file=sys.stderr)
+        return 1
+    # A relative path is taken from the app folder, not the current directory.
+    log.init(APP_DIR / log_path, source="supervisor")
 
     service_cfg = config.get("service") or {}
     service_name = service_cfg.get("name", "service")
-    log.info("starting %s", service_name)
+    log.info(f"starting {service_name}")
 
     units = build_units(config)
     if not units:
-        log.error("no units enabled in %s; exiting", CONFIG_PATH)
+        log.error(f"no units enabled in {CONFIG_PATH}; exiting")
         return 1
 
     child_unit_prefix = str(
@@ -76,8 +78,12 @@ def main() -> int:
     )
     server = uvicorn.Server(server_config)
 
+    received: list[int] = []
+
     def _shutdown(signum: int, _frame) -> None:  # noqa: ANN001
-        log.info("received signal %s", signum)
+        # No logging here: the handler can interrupt a log write in this
+        # same thread, and the write's lock is not re-entrant.
+        received.append(signum)
         server.should_exit = True
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -86,6 +92,8 @@ def main() -> int:
     try:
         server.run()  # blocks until should_exit
     finally:
+        if received:
+            log.info(f"received signal {received[0]}")
         supervisor.shutdown()
     return 0
 

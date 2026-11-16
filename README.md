@@ -41,14 +41,15 @@ You should get `{"status":"ok","units_alive":4,"units_total":4}`. Press
 Here is what happens from start to stop:
 
 1. **Start.** `python main.py` starts one process, the **supervisor**. It
-   reads [`config/settings.yaml`](config/settings.yaml), sets up logging
-   (`logs/supervisor.log`), and logs `starting data-processing`.
+   reads [`config/settings.yaml`](config/settings.yaml), opens the text log
+   at `logging.path`, and logs `starting data-processing`.
 2. **Find the units.** For every unit marked `enabled: true`,
    [`core/registry.py`](core/registry.py) looks up its Python class. For
    example, `ingestion` maps to `IngestionUnit` in `units/ingestion/unit.py`.
 3. **Give each unit its own process.** The supervisor starts every unit as a
    brand-new Python process. Each one has its own memory, its own Python
-   interpreter and its own log file (`logs/<child_unit_prefix>_<name>.log`). On Windows,
+   interpreter, and writes to the same text log as everything else, with
+   its name on each line. On Windows,
    when run from a venv, each shows up in Task Manager as
    `<child_unit_prefix>_<name>.exe`, for example `data_processing_ingestion.exe`.
 4. **Each unit runs its loop.** Inside its process a unit runs `setup()`
@@ -91,14 +92,15 @@ python main.py → supervisor process ──────────────
 │  • reads config/settings.yaml                                      │
 │  • watch thread: checks the units every 5 s, restarts dead ones    │
 │  • FastAPI control API on 127.0.0.1:8000                           │
-│  • writes logs/supervisor.log                                      │
+│  • opens the text log at logging.path                              │
 └──┬─────────────────┬──────────────────┬──────────────────┬─────────┘
    │ starts          │ starts           │ starts           │ starts
    ▼                 ▼                  ▼                  ▼
 ingestion        pre_processing      processing        post_processing
 own process      own process         own process       own process
-<prefix>_        <prefix>_           <prefix>_         <prefix>_
-ingestion.log    pre_processing.log  processing.log    post_processing.log
+   │                 │                  │                  │
+   └─────────────────┴───── all append to ─────────────────┘
+                     one text log (logging.path)
 ```
 
 Five real operating-system processes, shown in Task Manager or `ps`.
@@ -111,7 +113,7 @@ Five real operating-system processes, shown in Task Manager or `ps`.
 | [`core/supervisor.py`](core/supervisor.py) | supervisor | Starts, watches, restarts and stops the unit processes. Reports their status to the API. |
 | [`core/base_unit.py`](core/base_unit.py) | each unit | The `BaseUnit` contract (`setup` / `run` / `teardown`) and `unit_entry`, the first code a unit process runs. |
 | [`core/registry.py`](core/registry.py) | both | Maps each unit name to its class. |
-| [`core/logging_setup.py`](core/logging_setup.py) | both | Log files, log level, console output on or off. |
+| [`core/log.py`](core/log.py) | both | The text log: `log.info(message)` and `log.error(message)`. |
 | [`api/control.py`](api/control.py) | supervisor | The HTTP endpoints. |
 | `units/<name>/unit.py` | that unit | The unit's actual work. |
 | [`config/settings.yaml`](config/settings.yaml) | — | All settings. |
@@ -130,7 +132,7 @@ data-processing/
 │   ├── base_unit.py
 │   ├── supervisor.py
 │   ├── registry.py
-│   └── logging_setup.py
+│   └── log.py
 ├── api/
 │   └── control.py
 ├── units/
@@ -153,15 +155,36 @@ data-processing/
 
 The unit processes start fresh, so they can't see anything the supervisor
 loaded into memory. So `main.py` reads `settings.yaml` and hands each unit
-its own `cfg` block when starting it. It also copies the logging settings
-into environment variables, which every new process inherits.
+its own `cfg` block when starting it, along with the log file path.
 
-For logging settings, the first of these that is set wins:
+## Logging
 
-1. **Environment variable.** The installers use these to point logs at a
-   system folder.
-2. **`settings.yaml`.**
-3. **Built-in default.**
+Everything goes to one plain text file, set by `logging.path`. The
+supervisor and every unit append to it, and each line says who wrote it:
+
+```
+2026-11-16 16:47:24.616 INFO  [supervisor pid=4120] started unit ingestion pid=20060
+2026-11-16 16:47:25.690 INFO  [ingestion pid=20060] ingestion: pulled batch #1 from source
+2026-11-16 16:47:31.002 ERROR [processing pid=18812] unit crashed
+Traceback (most recent call last):
+  ...
+```
+
+There are two calls, each taking just a message:
+
+```python
+from core import log          # in a unit, self.log is the same thing
+
+log.info("pulled batch #3")
+log.error("could not reach the source")
+```
+
+Called inside an `except` block, `log.error` adds the traceback below the
+message. A lock file next to the log (`<log file>.lock`) makes sure lines
+from different processes never get mixed up.
+
+The file is never rotated or trimmed, so it grows until you clear it.
+Delete or archive it while the service is stopped.
 
 ## Configuration
 
@@ -170,12 +193,12 @@ Everything is in [`config/settings.yaml`](config/settings.yaml):
 ```yaml
 service:
   name: "data-processing"      # shown in the API title and the startup log
-  child_unit_prefix: "data_processing"  # log files <prefix>_<unit>.log; on Windows, processes <prefix>_<unit>.exe; defaults to "unit"
+  child_unit_prefix: "data_processing"  # Windows: units run as <prefix>_<unit>.exe; defaults to "unit"
 
 logging:
-  dir: "logs"                  # relative to the folder you start it from
-  level: "INFO"                # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  console: true                # also print log lines to the terminal
+  # Full path of the text log. Forward slashes work on Windows too.
+  # A relative path is taken from the app folder.
+  path: "C:/Services/data-processing/logs/data-processing.txt"
 
 api:
   host: "127.0.0.1"            # 127.0.0.1 = only this machine can connect
@@ -205,14 +228,8 @@ units:
 - Turn a unit off: set `enabled: false`.
 - Change how often a unit runs: edit `interval_seconds`.
 - Changes take effect only after a restart.
-
-Environment variables that override the `logging` block:
-
-| Variable              | Same as           | Example |
-|-----------------------|-------------------|---------|
-| `SERVICE_LOG_DIR`     | `logging.dir`     | `C:\ProgramData\data-processing\logs` |
-| `SERVICE_LOG_LEVEL`   | `logging.level`   | `DEBUG` |
-| `SERVICE_LOG_CONSOLE` | `logging.console` | `0` or `false` turns console output off |
+- Running staging and UAT on one machine: give each its own install
+  folder, `api.port`, `child_unit_prefix` and `logging.path`.
 
 ## Control API
 
@@ -297,7 +314,7 @@ away when the service is stopping, so shutdown stays fast.
   settings entry.
 - **Configured, not coded.** Which units run, how often, ports and logging
   all live in `settings.yaml`.
-- **Easy to see what's going on.** One log file per unit, `/health` and
+- **Easy to see what's going on.** One text log with the source on every line, `/health` and
   `/units` in the API, and named processes in Task Manager.
 - **Same behaviour on Windows and Linux,** with an installer for each.
 - **Can ship without source code** as a compiled package.
@@ -329,10 +346,12 @@ away when the service is stopping, so shutdown stays fast.
   service that's already running.
 - **Force-killing the supervisor leaves the units running on Windows.**
   This happens with Task Manager "End task" or `Stop-Process -Force`. The
-  orphaned units keep writing to and locking their log files until you
+  orphaned units keep writing to the log file until you
   kill them (see [Stopping and cleaning up](#stopping-and-cleaning-up)).
   Stopping it normally with `Ctrl+C` or by stopping the service doesn't
   have this problem.
+- **The log file is never rotated.** It keeps growing until you delete or
+  archive it, and there's no log level to turn messages down.
 - **`teardown()` is skipped for a unit that has to be force-stopped,**
   meaning one that doesn't exit within 10 seconds at shutdown.
 - **The compiled package needs the exact same Python version** (3.14 for
@@ -353,7 +372,8 @@ There are four ways to run it, from simplest to most permanent:
 ### 1. Run it in a terminal
 
 See [Quick start](#quick-start-windows). It runs only while that terminal
-is open. Logs go to `logs\` inside the project folder.
+is open. The log goes to `logging.path`; only the API server's own startup
+lines show in the terminal.
 
 ### 2. Build a compiled package
 
@@ -447,8 +467,8 @@ powershell -ExecutionPolicy Bypass -File "C:\Services\data-processing\deploy\win
 The installer checks the Python version (for packages), creates
 `C:\Services\data-processing\venv`, installs the requirements, registers
 the service, and starts it. It runs `main.pyc` for a package or `main.py`
-for source. It also gives the service 30 seconds to shut down cleanly, and
-turns console logging off so log lines aren't duplicated.
+for source. It also gives the service 30 seconds to shut down cleanly.
+Before installing, set `logging.path` in that folder's `settings.yaml`.
 
 **Step 4: Check it**
 
@@ -465,11 +485,8 @@ You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
 |---|---|
 | App and settings | `C:\Services\data-processing\` |
 | Python environment | `C:\Services\data-processing\venv\` |
-| Logs | `C:\ProgramData\data-processing\logs\` (`supervisor.log`, `<child_unit_prefix>_*.log`) |
-| Startup errors and crash tracebacks | `C:\ProgramData\data-processing\logs\service.err.log` |
-
-When it runs as a service, the log folder comes from the installer, so
-`logging.dir` in `settings.yaml` is ignored. `logging.level` still works.
+| Log | wherever `logging.path` in `settings.yaml` points |
+| Startup errors and crash tracebacks | `C:\ProgramData\data-processing\logs\service.err.log` (the installer's `-LogDir`) |
 
 **Day to day**
 
@@ -477,7 +494,7 @@ When it runs as a service, the log folder comes from the installer, so
 Restart-Service data-processing
 Stop-Service data-processing
 Start-Service data-processing
-Get-Content C:\ProgramData\data-processing\logs\data_processing_ingestion.log -Tail 20 -Wait
+Get-Content C:\Services\data-processing\logs\data-processing.txt -Tail 20 -Wait
 ```
 
 To change settings, edit `C:\Services\data-processing\config\settings.yaml`,
@@ -538,7 +555,11 @@ instead of unzipping.
 
 The script creates a `data-processing` system user, a venv, and the log
 folder `/var/log/data-processing/`. It installs the requirements and
-registers and starts the systemd service. Check and manage it with:
+registers and starts the systemd service. Before running it, point
+`logging.path` in `/opt/data-processing/config/settings.yaml` at that
+folder, for example `/var/log/data-processing/data-processing.txt`, because
+the service user can only write there and in `/opt/data-processing`.
+Check and manage it with:
 
 ```bash
 systemctl status data-processing
@@ -553,8 +574,10 @@ journalctl -u data-processing -f
 | `address already in use` / error 10048 | Something else is using port 8000, often an earlier run of this service | Stop the other copy (see below) or change `api.port` |
 | `bad magic number` | The package was built with a different Python version | Install the matching Python, or rebuild with this machine's Python |
 | Service starts, then stops | Startup error | Read `C:\ProgramData\data-processing\logs\service.err.log` |
-| `could not create renamed exe` warning | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |
-| Can't delete the `logs` folder | Orphaned units still have the log files open | See below |
+| `logging.path is not set` on startup | No `logging.path` in `settings.yaml` | Add it (see [Configuration](#configuration)) |
+| `log write failed` in the console or `service.err.log` | The log folder isn't writable, or the file is locked by another program | Fix the folder's permissions or `logging.path` |
+| `could not create renamed exe` error in the log | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |
+| Log file keeps growing after the service stopped | Orphaned units are still writing to it | See below |
 
 ## Stopping and cleaning up
 

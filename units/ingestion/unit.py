@@ -13,14 +13,14 @@ class IngestionUnit(BaseUnit):
     def setup(self) -> None:
         self._interval = float(self.cfg.get("interval_seconds", 3.0))
         self._batches = 0
-        self.log.info("ready (interval=%.1fs, pid=%d)", self._interval, os.getpid())
+        self.log.info(f"ready (interval={self._interval:.1f}s, pid={os.getpid()})")
 
     def run(self) -> None:
         while not self.stop.is_set():
             self._batches += 1
-            self.log.info("ingestion: pulled batch #%d from source", self._batches)
+            self.log.info(f"ingestion: pulled batch #{self._batches} from source")
             if self.stop.wait(self._interval):
                 return
 
     def teardown(self) -> None:
-        self.log.info("stopped after %d batches", self._batches)
+        self.log.info(f"stopped after {self._batches} batches")

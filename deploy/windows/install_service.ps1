@@ -44,9 +44,9 @@ try { & $Nssm remove   $ServiceName confirm | Out-Null } catch {}
 
 & $Nssm install $ServiceName $python $main
 & $Nssm set $ServiceName AppDirectory $AppDir
-# SERVICE_LOG_CONSOLE=0: NSSM already captures stderr into service.err.log,
-# so console logging would only duplicate every line there.
-& $Nssm set $ServiceName AppEnvironmentExtra "PYTHONUNBUFFERED=1" "SERVICE_LOG_DIR=$LogDir" "SERVICE_LOG_CONSOLE=0"
+# The app's own log file is logging.path in config\settings.yaml. $LogDir only
+# holds NSSM's capture of the console (startup errors, crash tracebacks).
+& $Nssm set $ServiceName AppEnvironmentExtra "PYTHONUNBUFFERED=1"
 & $Nssm set $ServiceName AppStdout (Join-Path $LogDir "service.out.log")
 & $Nssm set $ServiceName AppStderr (Join-Path $LogDir "service.err.log")
 & $Nssm set $ServiceName AppRotateFiles 1

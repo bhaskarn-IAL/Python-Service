@@ -7,9 +7,9 @@ service:
   child_unit_prefix: "data_processing"
 
 logging:
-  dir: "logs"
-  level: "INFO"
-  console: true   # also print log lines to the terminal; the Windows service turns this off
+  # Full path of the text log. The supervisor and every unit append to this one file.
+  # Use forward slashes on Windows too. A relative path is taken from the app folder.
+  path: "C:/S2/Random Stuffs/Python Service/logs/data-processing.txt"
 
 api:
   host: "127.0.0.1"
