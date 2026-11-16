@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import re
 import shutil
 import sys
 import threading
@@ -16,9 +17,13 @@ from core.base_unit import BaseUnit, unit_entry
 log = logging.getLogger("supervisor")
 
 
-def _executable_for(unit_name: str) -> str:
+DEFAULT_CHILD_UNIT_PREFIX = "unit"
+_PREFIX_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _executable_for(unit_name: str, prefix: str) -> str:
     """Return a python.exe copy renamed after the unit so it shows up as
-    ``unit_<name>.exe`` in Task Manager. Windows-only; a no-op elsewhere.
+    ``<prefix>_<name>.exe`` in Task Manager. Windows-only; a no-op elsewhere.
 
     Copies the *base* interpreter (not the venv redirector stub) into the
     venv's Scripts folder. That way:
@@ -32,7 +37,7 @@ def _executable_for(unit_name: str) -> str:
     # which would show up in Task Manager as an extra python.exe child.
     base = getattr(sys, "_base_executable", None) or sys.executable
     venv_scripts = Path(sys.executable).parent  # .../.venv/Scripts
-    dst = venv_scripts / f"unit_{unit_name}.exe"
+    dst = venv_scripts / f"{prefix}_{unit_name}.exe"
     if not dst.exists():
         try:
             shutil.copy2(base, dst)
@@ -67,6 +72,8 @@ class Supervisor:
     """Starts, watches, restarts and stops worker-unit processes.
 
     ``units`` maps unit name -> (BaseUnit subclass, cfg dict).
+    ``child_unit_prefix`` names each unit's log file (``<prefix>_<name>.log``)
+    and, on Windows, its child exe (``<prefix>_<name>.exe``).
     """
 
     POLL_INTERVAL = 5.0
@@ -74,7 +81,17 @@ class Supervisor:
     BACKOFF_MAX = 60.0
     JOIN_TIMEOUT = 10.0
 
-    def __init__(self, units: dict[str, tuple[Type[BaseUnit], Mapping[str, Any]]]) -> None:
+    def __init__(
+        self,
+        units: dict[str, tuple[Type[BaseUnit], Mapping[str, Any]]],
+        child_unit_prefix: str = DEFAULT_CHILD_UNIT_PREFIX,
+    ) -> None:
+        if not _PREFIX_RE.match(child_unit_prefix):
+            raise ValueError(
+                f"invalid child_unit_prefix {child_unit_prefix!r}: "
+                "use only letters, digits, '_', '-' or '.'"
+            )
+        self._child_unit_prefix = child_unit_prefix
         self._specs: dict[str, UnitSpec] = {
             name: UnitSpec(cls=cls, cfg=cfg) for name, (cls, cfg) in units.items()
         }
@@ -190,13 +207,13 @@ class Supervisor:
         if now < spec.backoff_until:
             return
         stop_event = mp.Event()
-        # Rename the child exe so Task Manager shows unit_<name>.exe.
+        # Rename the child exe so Task Manager shows <prefix>_<name>.exe.
         # set_executable is a global on the spawn context, but _start_unit
         # is serialized by _lock so there's no race.
-        mp.set_executable(_executable_for(name))
+        mp.set_executable(_executable_for(name, self._child_unit_prefix))
         proc = mp.Process(
             target=unit_entry,
-            args=(spec.cls, spec.cfg, stop_event),
+            args=(spec.cls, spec.cfg, stop_event, self._child_unit_prefix),
             name=f"unit:{name}",
             daemon=False,
         )

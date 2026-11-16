@@ -14,7 +14,7 @@ from api.control import build_app
 from core.base_unit import BaseUnit
 from core.logging_setup import apply_logging_config, configure_supervisor_logging
 from core.registry import resolve
-from core.supervisor import Supervisor
+from core.supervisor import DEFAULT_CHILD_UNIT_PREFIX, Supervisor
 
 CONFIG_PATH = Path(__file__).with_name("config") / "settings.yaml"
 log = logging.getLogger("main")
@@ -55,7 +55,10 @@ def main() -> int:
         log.error("no units enabled in %s; exiting", CONFIG_PATH)
         return 1
 
-    supervisor = Supervisor(units)
+    child_unit_prefix = str(
+        service_cfg.get("child_unit_prefix") or DEFAULT_CHILD_UNIT_PREFIX
+    ).strip()
+    supervisor = Supervisor(units, child_unit_prefix=child_unit_prefix)
     supervisor.start()
 
     api_cfg = config.get("api") or {}

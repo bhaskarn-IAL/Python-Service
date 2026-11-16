@@ -58,15 +58,16 @@ def configure_supervisor_logging() -> None:
     root.addHandler(_file_handler("supervisor.log"))
 
 
-def configure_unit_logging(unit_name: str) -> None:
-    """Called inside each worker process so its logs go to its own file."""
+def configure_unit_logging(unit_name: str, prefix: str = "unit") -> None:
+    """Called inside each worker process so its logs go to its own file,
+    ``<prefix>_<unit_name>.log``."""
     root = logging.getLogger()
     for h in list(root.handlers):
         root.removeHandler(h)
     root.setLevel(_log_level())
     if _log_console():
         root.addHandler(_stream_handler())
-    root.addHandler(_file_handler(f"unit_{unit_name}.log"))
+    root.addHandler(_file_handler(f"{prefix}_{unit_name}.log"))
 
 
 def apply_logging_config(cfg: dict | None) -> None:

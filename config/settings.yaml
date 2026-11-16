@@ -4,6 +4,7 @@
 
 service:
   name: "data-processing"
+  child_unit_prefix: "data_processing"
 
 logging:
   dir: "logs"

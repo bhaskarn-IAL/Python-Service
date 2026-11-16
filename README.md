@@ -48,8 +48,9 @@ Here is what happens from start to stop:
    example, `ingestion` maps to `IngestionUnit` in `units/ingestion/unit.py`.
 3. **Give each unit its own process.** The supervisor starts every unit as a
    brand-new Python process. Each one has its own memory, its own Python
-   interpreter and its own log file (`logs/unit_<name>.log`). On Windows,
-   when run from a venv, each shows up in Task Manager as `unit_<name>.exe`.
+   interpreter and its own log file (`logs/<child_unit_prefix>_<name>.log`). On Windows,
+   when run from a venv, each shows up in Task Manager as
+   `<child_unit_prefix>_<name>.exe`, for example `data_processing_ingestion.exe`.
 4. **Each unit runs its loop.** Inside its process a unit runs `setup()`
    once. Then it runs `run()`, a loop that does its work and waits
    `interval_seconds`, over and over until it's told to stop. Last it runs
@@ -96,8 +97,8 @@ python main.py → supervisor process ──────────────
    ▼                 ▼                  ▼                  ▼
 ingestion        pre_processing      processing        post_processing
 own process      own process         own process       own process
-unit_ingestion   unit_pre_           unit_processing   unit_post_
-.log             processing.log      .log              processing.log
+<prefix>_        <prefix>_           <prefix>_         <prefix>_
+ingestion.log    pre_processing.log  processing.log    post_processing.log
 ```
 
 Five real operating-system processes, shown in Task Manager or `ps`.
@@ -169,6 +170,7 @@ Everything is in [`config/settings.yaml`](config/settings.yaml):
 ```yaml
 service:
   name: "data-processing"      # shown in the API title and the startup log
+  child_unit_prefix: "data_processing"  # log files <prefix>_<unit>.log; on Windows, processes <prefix>_<unit>.exe; defaults to "unit"
 
 logging:
   dir: "logs"                  # relative to the folder you start it from
@@ -463,7 +465,7 @@ You should see `Running` and `{"status":"ok","units_alive":4,"units_total":4}`.
 |---|---|
 | App and settings | `C:\Services\data-processing\` |
 | Python environment | `C:\Services\data-processing\venv\` |
-| Logs | `C:\ProgramData\data-processing\logs\` (`supervisor.log`, `unit_*.log`) |
+| Logs | `C:\ProgramData\data-processing\logs\` (`supervisor.log`, `<child_unit_prefix>_*.log`) |
 | Startup errors and crash tracebacks | `C:\ProgramData\data-processing\logs\service.err.log` |
 
 When it runs as a service, the log folder comes from the installer, so
@@ -475,7 +477,7 @@ When it runs as a service, the log folder comes from the installer, so
 Restart-Service data-processing
 Stop-Service data-processing
 Start-Service data-processing
-Get-Content C:\ProgramData\data-processing\logs\unit_ingestion.log -Tail 20 -Wait
+Get-Content C:\ProgramData\data-processing\logs\data_processing_ingestion.log -Tail 20 -Wait
 ```
 
 To change settings, edit `C:\Services\data-processing\config\settings.yaml`,
@@ -551,7 +553,7 @@ journalctl -u data-processing -f
 | `address already in use` / error 10048 | Something else is using port 8000, often an earlier run of this service | Stop the other copy (see below) or change `api.port` |
 | `bad magic number` | The package was built with a different Python version | Install the matching Python, or rebuild with this machine's Python |
 | Service starts, then stops | Startup error | Read `C:\ProgramData\data-processing\logs\service.err.log` |
-| `could not create renamed exe` warning | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `unit_<name>.exe` names |
+| `could not create renamed exe` warning | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |
 | Can't delete the `logs` folder | Orphaned units still have the log files open | See below |
 
 ## Stopping and cleaning up
@@ -581,11 +583,12 @@ only this one, so check first that nothing else of yours runs that way.
 
 **Units whose supervisor is already gone** (orphans) aren't found by the
 command above. This stops only unit processes whose parent no longer
-exists:
+exists. Set `$prefix` to your `service.child_unit_prefix`:
 
 ```powershell
+$prefix = 'data_processing'
 $running = (Get-Process).Id
 Get-CimInstance Win32_Process |
-  Where-Object { ($_.Name -like 'unit_*.exe' -or $_.CommandLine -match 'multiprocessing\.spawn') -and $running -notcontains $_.ParentProcessId } |
+  Where-Object { ($_.Name -like "${prefix}_*.exe" -or $_.CommandLine -match 'multiprocessing\.spawn') -and $running -notcontains $_.ParentProcessId } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```

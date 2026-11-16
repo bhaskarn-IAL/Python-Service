@@ -33,15 +33,21 @@ class BaseUnit:
         """Close resources. Always runs, even if run() raised."""
 
 
-def unit_entry(cls: Type[BaseUnit], cfg: Mapping[str, Any], stop_event: EventType) -> None:
-    """Process entry point. Runs in the child process after spawn."""
+def unit_entry(
+    cls: Type[BaseUnit],
+    cfg: Mapping[str, Any],
+    stop_event: EventType,
+    log_prefix: str = "unit",
+) -> None:
+    """Process entry point. Runs in the child process after spawn.
+    ``log_prefix`` names the log file: ``<log_prefix>_<unit name>.log``."""
     # Child processes ignore Ctrl+C directly; the supervisor sets stop_event.
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except (ValueError, AttributeError):
         pass
 
-    configure_unit_logging(cls.name)
+    configure_unit_logging(cls.name, log_prefix)
     log = logging.getLogger(f"unit.{cls.name}")
 
     unit = cls(cfg, stop_event)
