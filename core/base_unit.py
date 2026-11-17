@@ -6,6 +6,7 @@ from multiprocessing.synchronize import Event as EventType
 from typing import Any, Mapping, Type
 
 from core import log
+from core.child_guard import watch_parent
 
 
 class BaseUnit:
@@ -48,6 +49,8 @@ def unit_entry(
         pass
 
     log.init(log_path, source=cls.name)
+    # If the supervisor is force-killed, stop cleanly instead of running on.
+    watch_parent(stop_event)
 
     unit = cls(cfg, stop_event)
     try:

@@ -13,6 +13,7 @@ from typing import Any, Mapping, Type
 
 from core import log
 from core.base_unit import BaseUnit, unit_entry
+from core.child_guard import bind_to_this_process
 
 DEFAULT_CHILD_UNIT_PREFIX = "unit"
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -215,6 +216,8 @@ class Supervisor:
             daemon=False,
         )
         proc.start()
+        # Windows: the OS kills this unit if the supervisor is force-killed.
+        bind_to_this_process(proc.pid)
         self._procs[name] = proc
         self._stop_events[name] = stop_event
         spec.last_start = time.time()

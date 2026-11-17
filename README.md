@@ -69,9 +69,27 @@ Here is what happens from start to stop:
    each unit finishes its current loop, runs `teardown()` and exits. The
    supervisor waits up to 10 seconds per unit, force-stops any that are
    still running, and exits itself.
+8. **If the supervisor is killed instead.** "End task", `taskkill /F`,
+   `kill -9` or a crash skip step 7, but the units still don't outlive it
+   (see [Units never outlive the supervisor](#units-never-outlive-the-supervisor)).
 
 The units never talk to each other. The only thing shared between the
 processes is that stop signal.
+
+### Units never outlive the supervisor
+
+If the supervisor process is force-killed, its units are stopped too, on
+Windows and Linux. Two layers in [`core/child_guard.py`](core/child_guard.py)
+make sure of it:
+
+| Layer | Where | What happens when the supervisor is killed | `teardown()` runs? |
+|---|---|---|---|
+| **Job Object** | Windows only, set up by the supervisor | Windows itself kills every unit (and anything a unit started) the moment the supervisor ends | No |
+| **Parent watcher** | Every unit, Windows and Linux | A thread in the unit notices the supervisor is gone and sets the stop signal; the unit finishes its loop and runs `teardown()`. If it hasn't exited 10 s later, it is ended | Yes, unless it hangs |
+
+So on Windows units stop immediately, and on Linux they stop cleanly within
+10 seconds. This also means a service manager that restarts a killed
+supervisor (NSSM, systemd) never ends up running two copies of a unit.
 
 Right now the four units are placeholders that each write a log line on
 their own timer:
@@ -113,6 +131,7 @@ Five real operating-system processes, shown in Task Manager or `ps`.
 | [`core/supervisor.py`](core/supervisor.py) | supervisor | Starts, watches, restarts and stops the unit processes. Reports their status to the API. |
 | [`core/base_unit.py`](core/base_unit.py) | each unit | The `BaseUnit` contract (`setup` / `run` / `teardown`) and `unit_entry`, the first code a unit process runs. |
 | [`core/registry.py`](core/registry.py) | both | Maps each unit name to its class. |
+| [`core/child_guard.py`](core/child_guard.py) | both | Stops units if the supervisor is force-killed: a Windows Job Object, plus a parent watcher in each unit. |
 | [`core/log.py`](core/log.py) | both | The text log: `log.info(message)` and `log.error(message)`. |
 | [`api/control.py`](api/control.py) | supervisor | The HTTP endpoints. |
 | `units/<name>/unit.py` | that unit | The unit's actual work. |
@@ -346,12 +365,11 @@ away when the service is stopping, so shutdown stays fast.
   because each new process loads everything from scratch.
 - **Settings need a restart.** Editing `settings.yaml` doesn't change a
   service that's already running.
-- **Force-killing the supervisor leaves the units running on Windows.**
-  This happens with Task Manager "End task" or `Stop-Process -Force`. The
-  orphaned units keep writing to the log file until you
-  kill them (see [Stopping and cleaning up](#stopping-and-cleaning-up)).
-  Stopping it normally with `Ctrl+C` or by stopping the service doesn't
-  have this problem.
+- **Force-killing the supervisor on Windows skips `teardown()`.** The
+  units are stopped with it, but Windows kills them outright, so they
+  can't clean up. On Linux they get up to 10 seconds to run `teardown()`.
+  Stopping it normally with `Ctrl+C` or by stopping the service always
+  runs `teardown()`.
 - **The log file is never rotated.** It keeps growing until you delete or
   archive it, and there's no log level to turn messages down.
 - **`teardown()` is skipped for a unit that has to be force-stopped,**
@@ -660,19 +678,21 @@ instance.
 | `logging.path is not set` on startup | No `logging.path` in `settings.yaml` | Add it (see [Configuration](#configuration)) |
 | `log write failed` in the console or `<service.name>.err.log` | The log folder isn't writable, or the file is locked by another program | Fix the folder's permissions or `logging.path` |
 | `could not create renamed exe` error in the log | Running from a system-wide Python instead of a venv | Harmless. Use a venv if you want the `<child_unit_prefix>_<name>.exe` names |
-| Log file keeps growing after the service stopped | Orphaned units are still writing to it | See below |
+| `could not tie pid=... to the supervisor's lifetime` in the log | Windows refused to add a unit to the supervisor's job | The unit's parent watcher still stops it if the supervisor dies; nothing to do unless it repeats |
+| `supervisor process is gone; stopping this unit` in the log | The supervisor was force-killed or crashed | Expected; the unit stopped itself. Check why the supervisor died |
 
 ## Stopping and cleaning up
 
 | How it's running | How to stop it |
 |---|---|
 | In a terminal | `Ctrl+C` in that terminal |
-| Windows Service | `Stop-Service data-processing` |
+| Windows Service | `net stop data-processing` |
 | Linux service | `sudo systemctl stop data-processing` |
+| Anything else | Kill the supervisor; its units stop with it |
 
-**If something is left behind**, for example after "End task" or a closed
-terminal, this finds every supervisor started as `main.py` or `main.pyc`,
-then stops its units first and itself second:
+**If a supervisor is still running somewhere**, for example from a terminal
+you can't find any more, this finds every supervisor started as `main.py`
+or `main.pyc` and stops it, which also stops its units:
 
 ```powershell
 Get-CimInstance Win32_Process |
@@ -687,9 +707,11 @@ Get-CimInstance Win32_Process |
 That stops every Python program on the machine started as `main.py`, not
 only this one, so check first that nothing else of yours runs that way.
 
-**Units whose supervisor is already gone** (orphans) aren't found by the
-command above. This stops only unit processes whose parent no longer
-exists. Set `$prefix` to your `service.child_unit_prefix`:
+**Units whose supervisor is already gone** (orphans) can't happen any more
+(see [Units never outlive the supervisor](#units-never-outlive-the-supervisor)).
+They can only be left over from a version before that was added. This stops
+only unit processes whose parent no longer exists. Set `$prefix` to your
+`service.child_unit_prefix`:
 
 ```powershell
 $prefix = 'data_processing'
