@@ -52,7 +52,7 @@ installed from a different folder.
 
 ## Installing from a compiled package
 
-Build it with `python build.py` (see the main README), copy the zip from
+Build it with `build_project.cmd` (or `python build.py`; see the main README), copy the zip from
 `dist\` to the target machine, and unpack it so that `main.pyc` sits directly
 in the install folder. On Windows:
 

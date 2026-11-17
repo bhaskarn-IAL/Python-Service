@@ -145,6 +145,7 @@ Five real operating-system processes, shown in Task Manager or `ps`.
 data-processing/
 ├── main.py
 ├── build.py                      # makes the compiled package in dist/
+├── build_project.cmd             # double-click wrapper for build.py (Windows)
 ├── config/
 │   └── settings.yaml
 ├── core/
@@ -397,46 +398,65 @@ lines show in the terminal.
 
 ### 2. Build a compiled package
 
-On your development machine:
+On your development machine, double-click **`build_project.cmd`** in the
+project folder, or run it from a Command Prompt:
 
-```powershell
-cd "E:\Project\Python Service"
-python build.py
+```bat
+"E:\Project\Python Service\build_project.cmd"
 ```
 
-This creates `dist\data-processing-0.1.0-py314.zip`, named from the name
+It needs no administrator rights, and the window stays open until you press
+a key. It builds with the project's `.venv` if there is one, otherwise with
+`python` on the PATH. To build with a specific Python, pass its path:
+`build_project.cmd C:\Python312\python.exe`. Behind the scenes it runs
+[`build.py`](build.py), so `python build.py` does the same.
+
+This creates `dist\data-processing-0.1.0-py312.zip`, named from the name
 and `version` in `pyproject.toml` plus the Python version used to build it.
 Inside:
 
 ```
-data-processing-0.1.0-py314\
+data-processing-0.1.0-py312\
 ├── main.pyc
 ├── api\  core\  units\  shared\     ← compiled .pyc only, no .py source
-├── config\settings.yaml             ← still editable on the server
-├── deploy\                          ← installers
+├── config\settings.yaml             ← copied as-is; edit it on each server
+├── deploy\                          ← installers (their two helper .py files stay as source)
 ├── requirements.txt
 └── BUILD_INFO.json                  ← name, version, Python version, build time
 ```
 
-To try it by hand on any machine with the same Python version:
+**Then deploy it:**
 
-```powershell
+1. Copy the zip to the server and unzip it into the instance's folder
+   (see step 2 of [Install as a Windows Service](#3-install-as-a-windows-service)).
+2. Edit that folder's `config\settings.yaml`. The zip contains *your*
+   development copy, so set this server's `service.name`,
+   `child_unit_prefix`, `api.port` and `logging.path`.
+3. Run `deploy\windows\install_service.cmd` from that folder (Linux:
+   `deploy/linux/install.sh`).
+
+To try it by hand on any machine with the same Python version, from the
+unzipped folder in a Command Prompt:
+
+```bat
 python -m venv venv
-.\venv\Scripts\pip install -r requirements.txt
-.\venv\Scripts\python main.pyc
+venv\Scripts\python.exe -m pip install -r requirements.txt
+venv\Scripts\python.exe main.pyc
 ```
 
 Good to know:
 
-- **The server needs the same Python version** as the build (3.14 here).
-  Any other version fails with "bad magic number". Both installers check
-  this before installing anything.
+- **The server needs the same Python version** as the build (`py312` in the
+  zip name means 3.12). Any other version fails with "bad magic number".
+  Both installers check this before installing anything.
 - **Dependencies aren't inside the zip.** FastAPI and the rest install from
   `requirements.txt` on the server, so it needs internet access during
   install.
 - **One zip works for Windows and Linux.**
 - **For a new release,** bump `version` in `pyproject.toml` and run
-  `python build.py` again.
+  `build_project.cmd` again.
+- **Compiled isn't secret.** `.pyc` hides the source from casual reading,
+  but tools exist that turn it back into readable code.
 
 ### 3. Install as a Windows Service
 
